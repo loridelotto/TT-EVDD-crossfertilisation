@@ -268,8 +268,7 @@ class TensorTrainState:
 
         The train is first brought into right-canonical form (QR sweep from
         the right) so that the subsequent left-to-right SVD sweep performs
-        optimal (Schmidt-value) truncation at every bond.  This mirrors what
-        Student 2's pipeline produces and is handy for generating test inputs.
+        optimal (Schmidt-value) truncation at every bond.
         """
         cores = [c.copy() for c in self.cores]
         n = len(cores)
