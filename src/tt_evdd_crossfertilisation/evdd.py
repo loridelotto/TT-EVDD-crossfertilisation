@@ -81,7 +81,7 @@ def from_state(vec):    # takes in a
 
     return dd, build(dd, v)
 
-"""def to_vector(dd, edge, size_=None):
+def to_vector(dd, edge, size_=None):
     if size_ is None:
         size_ = 2 ** dd["num_levels"]
     w, t = edge
@@ -92,7 +92,39 @@ def from_state(vec):    # takes in a
     half = size_ // 2
     return w * np.concatenate([to_vector(dd, dd["edges_0"][t], half),
                                to_vector(dd, dd["edges_1"][t], half)])
-"""
+
+def nodes_by_level(dd, root_edge):
+    """The nodes reachable from root_edge, grouped by level."""
+    seen, stack = set(), [root_edge[1]]
+    while stack:
+        i = stack.pop()
+        if i == TERM or i in seen:
+            continue
+        seen.add(i)
+        stack.append(dd["edges_0"][i][1])
+        stack.append(dd["edges_1"][i][1])
+    out = {}
+    for i in seen:
+        out.setdefault(dd["level"][i], []).append(i)
+    for lv in out:
+        out[lv].sort()
+    return out
+
+
+def contributions(dd, root_edge):
+    """Def. 2: c(v) = sum over all paths root -> v of |product of weights|^2."""
+    by_level = nodes_by_level(dd, root_edge)
+    c = {i: 0.0 for ids in by_level.values() for i in ids}
+    w_root, t_root = root_edge
+    if t_root == TERM:
+        return c
+    c[t_root] = abs(w_root) ** 2
+    for lv in sorted(by_level):
+        for i in by_level[lv]:
+            for w, t in (dd["edges_0"][i], dd["edges_1"][i]):
+                if t != TERM:
+                    c[t] += c[i] * abs(w) ** 2
+    return c
 
 def size(dd):
     return len(dd["level"])
