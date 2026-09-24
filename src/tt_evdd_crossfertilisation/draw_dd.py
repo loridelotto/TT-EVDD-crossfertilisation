@@ -1,12 +1,36 @@
-"""Draw a decision diagram as a TikZ figure."""
+"""Draw a decision diagram as a TikZ figure. Drawing only: nothing here knows
+about quantum states, contributions or approximation."""
 
 import math
 from fractions import Fraction
 
-from .evdd import TERM
+from .evdd import TERM, nodes_by_level
 
 EPS = 1e-9          # tolerance for rendering, not for the structure
 
+def _order(dd, by_level):
+    """Order the nodes of each level left to right by their smallest path.
+
+    The path is the string of branch labels read from the root, so the key is
+    a property of what the node *means*, not of the order it happened to be
+    built in. Two diagrams over the same state -- before and after an
+    approximation, say -- therefore place corresponding nodes in the same
+    order, which is what makes them comparable side by side.
+    """
+    path = {}
+    for lv in sorted(by_level):
+        for i in by_level[lv]:
+            if lv == 0:
+                path[i] = ""
+                continue
+            for j in by_level[lv - 1]:
+                for b, (w, t) in enumerate((dd["edges_0"][j], dd["edges_1"][j])):
+                    if w != 0 and t == i:
+                        cand = path[j] + str(b)
+                        if i not in path or cand < path[i]:
+                            path[i] = cand
+    return {lv: sorted(ids, key=lambda i: (path.get(i, ""), i))
+            for lv, ids in by_level.items()}
 
 def _real(x):
     """A real number in LaTeX. Recognises square roots of rationals with a
@@ -45,23 +69,18 @@ def _weight(z):
 
 
 def to_tikz(dd, root_edge, labels=None, dx=2.4, dy=2.0):
-    """Render the diagram as a TikZ picture, ready to paste into a LaTeX file.
+    """Render as a TikZ picture the diagram reachable from root_edge.
 
-    Requires \\usepackage{tikz} and \\usetikzlibrary{arrows.meta,positioning}.
+    Only reachable nodes are drawn: dd also holds nodes left over from earlier
+    versions of the diagram, and drawing those would superimpose two diagrams.
 
     Dashed edge = branch 0, solid edge = branch 1. Weights equal to 1 are left
-    unlabelled and dead branches are not drawn, following the usual convention
-    in the decision-diagram literature.
+    unlabelled and dead branches are not drawn, as is usual in the literature.
 
     labels: optional dict id -> string, printed next to each node. Pass
-            {i: str(i) for i in dd["level"]} to see the node ids, or the norm
-            contributions once you compute them.
+            {i: f"{c[i]:.2f}" for i in c} to show the norm contributions.
     """
-    by_level = {}
-    for i, lv in dd["level"].items():
-        by_level.setdefault(lv, []).append(i)
-    for lv in by_level:
-        by_level[lv].sort()
+    by_level = _order(dd, nodes_by_level(dd, root_edge))
     n_levels = max(by_level, default=-1) + 1
 
     out = [r"\begin{tikzpicture}[",
@@ -76,9 +95,9 @@ def to_tikz(dd, root_edge, labels=None, dx=2.4, dy=2.0):
 
     pos = {}
     for lv in sorted(by_level):
-        nodes = by_level[lv]
-        for j, i in enumerate(nodes):
-            x = (j - (len(nodes) - 1) / 2) * dx
+        ids = by_level[lv]
+        for j, i in enumerate(ids):
+            x = (j - (len(ids) - 1) / 2) * dx
             y = -lv * dy
             pos[i] = (x, y)
             out.append(f"  \\node[nd] (n{i}) at ({x:.2f}, {y:.2f}) {{$x_{{{lv}}}$}};")
@@ -97,17 +116,51 @@ def to_tikz(dd, root_edge, labels=None, dx=2.4, dy=2.0):
 
     # the two branches are labelled at different fractions along the edge, so
     # that crossing edges do not stack their labels on top of each other
-    for i in sorted(dd["level"]):
-        for branch, style, side, along in ((dd["edges_0"][i], "dashed", "left", 0.34),
-                                           (dd["edges_1"][i], "solid", "right", 0.66)):
+    for i in sorted(pos):
+        e0, e1 = dd["edges_0"][i], dd["edges_1"][i]
+        # two live branches into the same node would lie on top of each other
+        twin = e0[0] != 0 and e1[0] != 0 and e0[1] == e1[1]
+        for branch, style, side, along, bend in (
+                (e0, "dashed", "left", 0.34, "bend left=45"),
+                (e1, "solid", "right", 0.66, "bend right=45")):
             w, t = branch
             if w == 0:
                 continue                      # dead branch: not drawn
             dest = "term" if t == TERM else f"n{t}"
             lab = _weight(w)
             mid = f" node[lbl, {side}, pos={along}] {{${lab}$}}" if lab else ""
-            out.append(f"  \\draw[e, {style}] (n{i}) --{mid} ({dest});")
+            link = f"to[{bend}]" if twin else "--"
+            out.append(f"  \\draw[e, {style}] (n{i}) {link}{mid} ({dest});")
 
     out.append(r"\end{tikzpicture}")
     return "\n".join(out)
 
+
+def to_document(rows, captions=None, gap="1.4cm", vgap="10pt"):
+    """Wrap TikZ pictures into a compilable standalone document.
+
+    rows is either a list of pictures (one row) or a list of such lists (a
+    grid). captions has the same shape and is printed under each picture.
+
+    amsmath is needed as well as tikz: the weight labels use \\tfrac.
+    """
+    if rows and isinstance(rows[0], str):
+        rows, captions = [rows], [captions] if captions else None
+    width = max(len(r) for r in rows)
+    cols = ("@{\\hskip " + gap + "}").join("c" for _ in range(width))
+
+    out = [r"\documentclass[border=12pt]{standalone}",
+           r"\usepackage{amsmath}",
+           r"\usepackage{tikz}",
+           r"\usetikzlibrary{arrows.meta,positioning}",
+           r"\begin{document}",
+           r"\begin{tabular}{" + cols + "}"]
+    for r, row in enumerate(rows):
+        pad = [""] * (width - len(row))
+        out.append("\n&\n".join(list(row) + pad))
+        if captions and captions[r]:
+            out.append(r"\\[4pt] " + " & ".join(list(captions[r]) + pad))
+        if r != len(rows) - 1:
+            out.append(r"\\[" + vgap + "]")
+    out += [r"\end{tabular}", r"\end{document}"]
+    return "\n".join(out)
