@@ -1,36 +1,16 @@
-"""Draw a decision diagram as a TikZ figure. Drawing only: nothing here knows
-about quantum states, contributions or approximation."""
+"""Draw a decision diagram as a TikZ figure.
+
+Drawing only: nothing here knows about quantum states, contributions or
+approximation. A diagram is the pair (dd, root_edge) of hillmich_approx.py.
+"""
 
 import math
 from fractions import Fraction
 
-from .evdd import TERM, nodes_by_level
+from .hillmich_approx import TERM, nodes_by_level
 
 EPS = 1e-9          # tolerance for rendering, not for the structure
 
-def _order(dd, by_level):
-    """Order the nodes of each level left to right by their smallest path.
-
-    The path is the string of branch labels read from the root, so the key is
-    a property of what the node *means*, not of the order it happened to be
-    built in. Two diagrams over the same state -- before and after an
-    approximation, say -- therefore place corresponding nodes in the same
-    order, which is what makes them comparable side by side.
-    """
-    path = {}
-    for lv in sorted(by_level):
-        for i in by_level[lv]:
-            if lv == 0:
-                path[i] = ""
-                continue
-            for j in by_level[lv - 1]:
-                for b, (w, t) in enumerate((dd["edges_0"][j], dd["edges_1"][j])):
-                    if w != 0 and t == i:
-                        cand = path[j] + str(b)
-                        if i not in path or cand < path[i]:
-                            path[i] = cand
-    return {lv: sorted(ids, key=lambda i: (path.get(i, ""), i))
-            for lv, ids in by_level.items()}
 
 def _real(x):
     """A real number in LaTeX. Recognises square roots of rationals with a
@@ -68,19 +48,44 @@ def _weight(z):
     return f"{_real(z.real)}{sign}{_real(abs(z.imag))}i"
 
 
-def to_tikz(dd, root_edge, labels=None, dx=2.4, dy=2.0):
-    """Render as a TikZ picture the diagram reachable from root_edge.
+def _order(dd, by_level):
+    """Order the nodes of each level left to right by their smallest path.
 
-    Only reachable nodes are drawn: dd also holds nodes left over from earlier
-    versions of the diagram, and drawing those would superimpose two diagrams.
+    The path is the string of branch labels read from the root, so the key is
+    a property of what the node means, not of the order it happened to be
+    built in. Two diagrams of the same state -- before and after an
+    approximation -- therefore place corresponding nodes in the same order.
+    """
+    path = {}
+    for lv in sorted(by_level):
+        for i in by_level[lv]:
+            if lv == min(by_level):
+                path[i] = ""
+                continue
+            for j in by_level.get(lv - 1, []):
+                for b, (w, t) in enumerate((dd["edges_0"][j], dd["edges_1"][j])):
+                    if w != 0 and t == i:
+                        cand = path[j] + str(b)
+                        if i not in path or cand < path[i]:
+                            path[i] = cand
+    return {lv: sorted(ids, key=lambda i: (path.get(i, ""), i))
+            for lv, ids in by_level.items()}
 
-    Dashed edge = branch 0, solid edge = branch 1. Weights equal to 1 are left
-    unlabelled and dead branches are not drawn, as is usual in the literature.
 
-    labels: optional dict id -> string, printed next to each node. Pass
+def to_tikz(evdd, labels=None, dx=2.4, dy=2.0):
+    """Render a diagram as a TikZ picture, ready to paste into a LaTeX file.
+
+    Needs \\usepackage{amsmath,tikz} and \\usetikzlibrary{arrows.meta,positioning}.
+
+    Only the nodes reachable from the root are drawn: the store also keeps
+    nodes of other diagrams. Dashed edge = branch 0, solid edge = branch 1.
+    Weights equal to 1 are left unlabelled and dead branches are not drawn.
+
+    labels: optional dict id -> string printed next to each node, e.g.
             {i: f"{c[i]:.2f}" for i in c} to show the norm contributions.
     """
-    by_level = _order(dd, nodes_by_level(dd, root_edge))
+    dd, root_edge = evdd
+    by_level = _order(dd, nodes_by_level(evdd))
     n_levels = max(by_level, default=-1) + 1
 
     out = [r"\begin{tikzpicture}[",
@@ -141,8 +146,6 @@ def to_document(rows, captions=None, gap="1.4cm", vgap="10pt"):
 
     rows is either a list of pictures (one row) or a list of such lists (a
     grid). captions has the same shape and is printed under each picture.
-
-    amsmath is needed as well as tikz: the weight labels use \\tfrac.
     """
     if rows and isinstance(rows[0], str):
         rows, captions = [rows], [captions] if captions else None
