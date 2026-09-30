@@ -4,7 +4,8 @@ import numpy as np
 import quimb as qu
 import quimb.tensor as qtn
 
-def create_ghz_state(n_qubits: int, max_bond: int = 2)->qtn.MatrixProductState:
+def create_ghz_state(n_qubits: int, canonize: Optional[str] = None,
+                      max_bond: int = 2)->qtn.MatrixProductState:
     """
     Generates an n-qubit Greenberger-Horne-Zeilinger (GHZ) state:
     (|00...0> + |11...1>) / sqrt(2)
@@ -18,11 +19,16 @@ def create_ghz_state(n_qubits: int, max_bond: int = 2)->qtn.MatrixProductState:
     for i in range(n_qubits - 1):
         mps.gate_split(qu.CNOT(), where=(i, i+1), inplace=True, max_bond=max_bond)
 
-    mps.normalize()
+    if canonize == "left":
+        mps.left_canonicalize(normalize=True, inplace=True)
+    if canonize == "right" or canonize is None:
+        mps.right_canonicalize(normalize=True, inplace=True)
+    
     return mps
 
 def create_high_entangled_state(n_qubits:int,
                                 max_bond: Optional[int],
+                                canonize: Optional[str] = None,
                                 depth: int = 6,
                                 seed:Optional[int] = None
                                 ) ->qtn.MatrixProductState:
@@ -43,12 +49,16 @@ def create_high_entangled_state(n_qubits:int,
             mps.gate_(u_gate, where=(i, i+1), contract="split", 
                       max_bond=max_bond, cutoff=0.0)
 
-    mps.normalize()
+    if canonize == "left":
+        mps.left_canonicalize(normalize=True, inplace=True)
+    if canonize == "right" or canonize is None:
+        mps.right_canonicalize(normalize=True, inplace=True)
     return mps
 
 def evaluate_truncation_error(
     mps_exact: qtn.MatrixProductState,
     max_bond: int,
+    canonize: Optional[str] = None,
     cutoff: float = 0.0
 ) -> Tuple[qtn.MatrixProductState, Dict[str, Any]]:
     """
@@ -59,7 +69,16 @@ def evaluate_truncation_error(
     """
     mps_trunc = mps_exact.copy()
     mps_trunc.compress(max_bond=max_bond, cutoff=cutoff)
-    mps_trunc.normalize()
+
+    # apply the normalization without destroying the canon form:
+    #   - if == left all the weights are inside the last tensor (the last dot)
+    #     so I can just hard code it.
+    #   - if == right on the most left tesnotr of the TT.
+    if canonize == "left":
+        mps_trunc.left_canonicalize(normalize=True, inplace=True) 
+    if canonize == "right" or canonize is None:
+        mps_trunc.right_canonicalize(normalize=True, inplace=True)
+                                                                
 
     overlap = mps_exact.H @ mps_trunc # inner prooduct between the stetes
     infidelity = float(1.0 - np.abs(overlap) ** 2)
