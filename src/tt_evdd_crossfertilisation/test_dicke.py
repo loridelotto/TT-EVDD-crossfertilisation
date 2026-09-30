@@ -11,7 +11,7 @@ import numpy as np
 
 from .hillmich_approx import (from_state, approx_hillmich, size, fidelity,
                               contributions, nodes_by_level)
-from .draw_dd import to_tikz, to_document
+from .draw_EVDDD import to_tikz, to_document
 
 N, K = 6, 3
 SWEEP = (0.99, 0.95, 0.9, 0.8, 0.7, 0.6, 0.5, 0.3)
