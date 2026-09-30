@@ -1,7 +1,17 @@
-"""Draw a decision diagram as a TikZ figure.
+"""Draw decision diagrams as TikZ figures.
 
-Drawing only: nothing here knows about quantum states, contributions or
-approximation. A diagram is the pair (dd, root_edge) of hillmich_approx.py.
+    from .draw_EVDD import to_tikz, nd_to_tikz, to_document
+
+    to_tikz(det_evdd)    # deterministic: the result of from_state / from_nd / approx_hillmich
+    nd_to_tikz(graph)    # non-deterministic: the colleague's ndEVDDGraph, or its JSON dict
+
+Both return a TikZ string. To turn it into a .tex file:
+
+    from pathlib import Path
+    Path("diagram.tex").write_text(to_document([to_tikz(det_evdd)]))
+
+then compile it with:  pdflatex diagram.tex
+Several pictures in the same list end up side by side.
 """
 
 import math
@@ -166,4 +176,113 @@ def to_document(rows, captions=None, gap="1.4cm", vgap="10pt"):
         if r != len(rows) - 1:
             out.append(r"\\[" + vgap + "]")
     out += [r"\end{tabular}", r"\end{document}"]
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- #
+# Non-deterministic diagrams, as written by the tt2dd converter               #
+# --------------------------------------------------------------------------- #
+
+def _nd_order(nodes, by_level, root):
+    """Left-to-right order of the nd nodes of each level, by smallest path from
+    the root, as _order does for deterministic diagrams."""
+    path = {root: ""}
+    for lv in sorted(by_level):
+        for i in sorted(by_level[lv], key=lambda i: (path.get(i, "~"), i)):
+            if i not in path:
+                continue                           # not reachable from the root
+            for b, key in enumerate(("edges_0", "edges_1")):
+                for e in nodes[i][key]:
+                    cand = path[i] + str(b)
+                    t = e["target"]
+                    if t not in path or cand < path[t]:
+                        path[t] = cand
+    return {lv: sorted(ids, key=lambda i: (path.get(i, "~"), i))
+            for lv, ids in by_level.items()}
+
+
+def nd_to_tikz(nd, labels=None, dx=3.0, dy=2.2, spread=35):
+    """Render a non-deterministic EVDD as a TikZ picture.
+
+    nd is the colleague's diagram: either the JSON object of the
+    tt2dd.nd-evdd format (json.load of his file, or graph.to_dict()), or his
+    ndEVDDGraph itself.
+
+    Same conventions as to_tikz: dashed = branch 0, solid = branch 1, weights
+    equal to 1 unlabelled. A branch may hold several edges; when two or more
+    edges join the same pair of nodes they are bent apart by `spread` degrees,
+    each with its label on the outer side of its curve.
+
+    labels: optional dict id -> string printed next to each node.
+    """
+    obj = nd.to_dict() if hasattr(nd, "to_dict") else nd
+    if obj.get("format") != "tt2dd.nd-evdd":
+        raise ValueError(f"not a tt2dd.nd-evdd diagram: {obj.get('format')!r}")
+    n, term = obj["num_levels"], obj["terminal_id"]
+    nodes = {v["id"]: v for v in obj["nodes"]}
+    by_level = {}
+    for v in obj["nodes"]:
+        by_level.setdefault(v["level"], []).append(v["id"])
+    root = obj["root_edge"]["target"]
+    by_level = _nd_order(nodes, by_level, root)
+
+    out = [r"\begin{tikzpicture}[",
+           r"    every node/.style={font=\small},",
+           r"    nd/.style={circle, draw, minimum size=7.5mm, inner sep=0pt},",
+           r"    tm/.style={rectangle, draw, minimum size=6mm, inner sep=2pt},",
+           r"    e/.style={-{Stealth[length=2mm]}},",
+           r"    lbl/.style={font=\scriptsize, inner sep=1.5pt, fill=white,",
+           r"                fill opacity=0.85, text opacity=1},",
+           r"    idl/.style={font=\tiny, inner sep=1pt, gray},",
+           r"  ]"]
+
+    def name(i):
+        return "term" if i == term else f"n{i}"
+
+    pos = {}
+    for lv in sorted(by_level):
+        ids = by_level[lv]
+        for j, i in enumerate(ids):
+            x = (j - (len(ids) - 1) / 2) * dx
+            pos[i] = (x, -lv * dy)
+            out.append(f"  \\node[nd] (n{i}) at ({x:.2f}, {-lv * dy:.2f}) {{$x_{{{lv}}}$}};")
+            if labels and i in labels:
+                where = "left" if x < 0 else "right"
+                out.append(f"  \\node[idl, {where}=2pt of n{i}] {{{labels[i]}}};")
+    out.append(f"  \\node[tm] (term) at (0, {-n * dy:.2f}) {{$1$}};")
+
+    # the incoming edge of the root
+    w_root = complex(*obj["root_edge"]["weight"])
+    if root != term and w_root != 0:
+        rx, ry = pos[root]
+        out.append(f"  \\coordinate (in) at ({rx:.2f}, {ry + 1.0:.2f});")
+        lab = _weight(w_root)
+        mid = f" node[lbl, right] {{${lab}$}}" if lab else ""
+        out.append(f"  \\draw[e, solid] (in) --{mid} ({name(root)});")
+
+    # all edges, grouped by (source, target) so that parallel ones can be
+    # spread out: branch 0 first, then branch 1
+    for lv in sorted(by_level):
+        for i in by_level[lv]:
+            groups = {}
+            for key, style in (("edges_0", "dashed"), ("edges_1", "solid")):
+                for e in nodes[i][key]:
+                    groups.setdefault(e["target"], []).append((style, complex(*e["weight"])))
+            for t, edges in groups.items():
+                k = len(edges)
+                for j, (style, w) in enumerate(edges):
+                    angle = (j - (k - 1) / 2) * spread
+                    lab = _weight(w)
+                    if angle == 0:
+                        link = "--"
+                        place = "left" if style == "dashed" else "right"
+                    else:
+                        # going down, "bend right" bulges west and "bend left"
+                        # east: the label goes on the bulging side
+                        link = f"to[bend {'right' if angle < 0 else 'left'}={abs(angle):g}]"
+                        place = "auto, swap" if angle < 0 else "auto"
+                    mid = f" node[lbl, {place}, pos=0.5] {{${lab}$}}" if lab else ""
+                    out.append(f"  \\draw[e, {style}] (n{i}) {link}{mid} ({name(t)});")
+
+    out.append(r"\end{tikzpicture}")
     return "\n".join(out)
