@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local exploration & scratchpad notebooks
+src/tt_evdd_crossfertilisation/quimb_intro.ipynb
