@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tt2dd"
+version = "0.1.0"
+description = "Linear-time translation of Tensor Trains (MPS) into non-deterministic edge-valued decision diagrams (nd-EVDD)."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Theo Durant" }]
+keywords = ["tensor network", "matrix product state", "decision diagram", "quantum", "knowledge compilation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+quimb = ["quimb>=1.8"]
+mqt = ["mqt.core>=2.7", "mqt.ddsim>=1.24"]
+test = ["pytest>=7"]
+dev = ["tt2dd[quimb,mqt,test]"]
+
+[tool.setuptools.packages.find]
+include = ["tt2dd*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
