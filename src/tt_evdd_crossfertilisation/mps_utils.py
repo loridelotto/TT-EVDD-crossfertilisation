@@ -107,7 +107,7 @@ def create_high_entangled_state(n_qubits:int,
         mps.right_canonicalize(normalize=True, inplace=True)
     return mps
 
-def evaluate_truncation_error_fidelity(mps_exact: qtn.MatrixProductState,
+def evaluate_truncation_error(mps_exact: qtn.MatrixProductState,
                                        target_fidelity: Optional[float] = None,
                                        canonize: Optional[str] = "right",
                                        max_bond: Optional[int] = None
@@ -126,14 +126,6 @@ def evaluate_truncation_error_fidelity(mps_exact: qtn.MatrixProductState,
         "right", "left". (By default is "right")
     - max_bond: int, optional
         max chi value supported between tensors. None by default.
-
-    ***
-    # The math
-    For this approach, we need a normalized MPS in such a way to use a sequence 
-    of orthogonal projections. It's useful for the following relationship: if 
-    we cut the weight at bond k (the sum of squared discarded singular values),
-    the fidelity F = |<Psi|Psi_trunc>|^2 >= 1 - sum_k delta_k, by consequences, 
-    delta_k <= (1 - fidelity_target)/(n-1) with n-1 bonds.
     """
 
     mps_trunc = mps_exact.copy()
