@@ -4,6 +4,41 @@ import numpy as np
 import quimb as qu
 import quimb.tensor as qtn
 
+def convert_to_canonical_TT(psi: np.array,
+                            canonize: Optional[str] = "right",
+                            max_bond: Optional[int] = None,
+                            cutoff: float = 0.0) -> qtn.MatrixProductState:
+    """
+    Convert a quantum state of complex amplitudes into a canonical Tensor Train
+
+    - psi: np.array()
+        vector of dtype=complex which represents the complex amplitude.
+    - canonize: std, optional
+        to decide in which of the possible way to canonize (right by default)
+    - max_bond: int, optional
+        to decide if approximate the TT while building it with SVD algorithm 
+    """
+    # converts any input into a contiguous array of complex data
+    amplitude_vector = np.asarray(psi, dtype=complex).ravel()
+
+    norm = np.linalg.norm(amplitude_vector)
+    amplitude_vector = amplitude_vector / norm # normalization before transformation.
+
+    # returns the number of bits to represent the integer size
+    dimension = amplitude_vector.size.bit_length() - 1
+
+    # converts into mps using quimb
+    # dims is defined as [2]*dimesnion to create a list of 2s of dimension=dimension.
+    mps = qtn.MatrixProductState.from_dense(amplitude_vector, dims=[2]*dimension,
+                                  max_bond=max_bond, cutoff=cutoff)
+
+    if canonize == "left":
+        mps.left_canonicalize(normalize=True, inplace=True)
+    elif canonize == "right" or canonize is None:
+        mps.right_canonicalize(normalize=True, inplace=True)
+
+    return mps
+
 def create_ghz_state(n_qubits: int, canonize: Optional[str] = None,
                       max_bond: int = 2)->qtn.MatrixProductState:
     """
