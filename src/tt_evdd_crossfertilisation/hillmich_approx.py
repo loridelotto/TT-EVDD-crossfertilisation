@@ -1,7 +1,7 @@
 """Deterministic edge-valued decision diagrams (EVDDs) for quantum states,
 and the approximation of Hillmich et al., Sec. 4.3.
 
-A diagram is the pair (dd, root_edge)+
+A diagram is the pair (dd, root_edge)
 Typical use:
     evdd = from_state(psi)
     app = approx_hillmich(evdd, f=0.8)
