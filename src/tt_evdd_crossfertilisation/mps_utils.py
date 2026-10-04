@@ -39,6 +39,23 @@ def convert_to_canonical_TT(psi: np.array,
 
     return mps
 
+def random_state_vector(n_qubits: int, seed: int = None) -> np.ndarray:
+    """Generate a random state vector of 2**n complex amplitudes (complex128),
+
+    sampled uniformly according to the Haar measure and normalized to unit norm.
+    """
+    rng = np.random.default_rng(seed)
+    dim = 2**n_qubits
+
+    # Real and imaginary parts sampled from a standard normal distribution N(0, 1)
+    real_part = rng.normal(0.0, 1.0, size=dim)
+    imag_part = rng.normal(0.0, 1.0, size=dim)
+    psi = (real_part + 1j * imag_part).astype(np.complex128)
+
+    # Normalize to ensure ||psi||_2 = 1
+    psi /= np.linalg.norm(psi)
+    return psi
+
 def create_ghz_state(n_qubits: int, canonize: Optional[str] = None,
                       max_bond: int = 2)->qtn.MatrixProductState:
     """
@@ -90,20 +107,48 @@ def create_high_entangled_state(n_qubits:int,
         mps.right_canonicalize(normalize=True, inplace=True)
     return mps
 
-def evaluate_truncation_error(
-    mps_exact: qtn.MatrixProductState,
-    max_bond: int,
-    canonize: Optional[str] = None,
-    cutoff: float = 0.0
-) -> Tuple[qtn.MatrixProductState, Dict[str, Any]]:
+def evaluate_truncation_error_fidelity(mps_exact: qtn.MatrixProductState,
+                                       target_fidelity: Optional[float] = None,
+                                       canonize: Optional[str] = "right",
+                                       max_bond: Optional[int] = None
+                                       )->Tuple[qtn.MatrixProductState, 
+                                                Dict[str,Any]]:
     """
-    Compresses an exact MPS to a target max_bond and calculates truncation metrics:
-      - overlap: <psi_exact | psi_trunc>
-      - fidelity: |<psi_exact | psi_trunc>|^2
-      - norm_distance: ||psi_exact - psi_trunc||_2
+    Truncate by giving in input the fidelity and optionally the max_bond
+
+    Parameters
+    -----------
+    - mps_exact: qtn.MatrixProductState
+        the exact MPS that will be truncated
+    - target_fidelity: float, optional
+        the minimun fidelity to reach while truncating. It must be (0, 1]
+    - canonize: std, optional
+        "right", "left". (By default is "right")
+    - max_bond: int, optional
+        max chi value supported between tensors. None by default.
+
+    ***
+    # The math
+    For this approach, we need a normalized MPS in such a way to use a sequence 
+    of orthogonal projections. It's useful for the following relationship: if 
+    we cut the weight at bond k (the sum of squared discarded singular values),
+    the fidelity F = |<Psi|Psi_trunc>|^2 >= 1 - sum_k delta_k, by consequences, 
+    delta_k <= (1 - fidelity_target)/(n-1) with n-1 bonds.
     """
+
     mps_trunc = mps_exact.copy()
-    mps_trunc.compress(max_bond=max_bond, cutoff=cutoff)
+    n = mps_trunc.L # length i.e. number of sites
+    mps_trunc.normalize() # weigths must sum to 1
+
+    if target_fidelity is not None:
+        cut_value = (1-target_fidelity)/max(n-1, 1)
+    else:
+        cut_value = 0.0
+
+    mps_trunc.compress(form=canonize, 
+                       max_bond=max_bond,
+                        cutoff=cut_value,
+                        cutoff_mode="sum2")
 
     # apply the normalization without destroying the canon form:
     #   - if == left all the weights are inside the last tensor (the last dot)
@@ -113,20 +158,20 @@ def evaluate_truncation_error(
         mps_trunc.left_canonicalize(normalize=True, inplace=True) 
     if canonize == "right" or canonize is None:
         mps_trunc.right_canonicalize(normalize=True, inplace=True)
-                                                                
 
-    overlap = mps_exact.H @ mps_trunc # inner prooduct between the stetes
-    fidelity = float(np.abs(overlap) ** 2)
-    norm_dist = float((mps_exact - mps_trunc).norm())
+    overlap = mps_exact.H @ mps_trunc
+    norm_exact_sq = np.real(mps_exact.H @ mps_exact)
+    norm_trunc_sq = np.real(mps_trunc.H @ mps_trunc)
+    
+    fidelity = float(np.abs(overlap)**2 / (norm_exact_sq * norm_trunc_sq))
 
     metrics = {
-        "target_max_bond": max_bond,
         "exact_max_bond": mps_exact.max_bond(),
         "truncated_max_bond": mps_trunc.max_bond(),
-        "overlap": overlap,
-        "fidelity": fidelity,
-        "norm_distance": norm_dist,
         "exact_bonds": mps_exact.bond_sizes(),
         "truncated_bonds": mps_trunc.bond_sizes(),
+        "target_reached": fidelity,
+        "per_bond_cutoff": cut_value
     }
+
     return mps_trunc, metrics
