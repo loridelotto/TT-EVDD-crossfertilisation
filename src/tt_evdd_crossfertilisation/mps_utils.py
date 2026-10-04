@@ -99,7 +99,7 @@ def evaluate_truncation_error(
     """
     Compresses an exact MPS to a target max_bond and calculates truncation metrics:
       - overlap: <psi_exact | psi_trunc>
-      - infidelity: 1 - |<psi_exact | psi_trunc>|^2
+      - fidelity: |<psi_exact | psi_trunc>|^2
       - norm_distance: ||psi_exact - psi_trunc||_2
     """
     mps_trunc = mps_exact.copy()
@@ -116,7 +116,7 @@ def evaluate_truncation_error(
                                                                 
 
     overlap = mps_exact.H @ mps_trunc # inner prooduct between the stetes
-    infidelity = float(1.0 - np.abs(overlap) ** 2)
+    fidelity = float(np.abs(overlap) ** 2)
     norm_dist = float((mps_exact - mps_trunc).norm())
 
     metrics = {
@@ -124,7 +124,7 @@ def evaluate_truncation_error(
         "exact_max_bond": mps_exact.max_bond(),
         "truncated_max_bond": mps_trunc.max_bond(),
         "overlap": overlap,
-        "infidelity": infidelity,
+        "infidelity": fidelity,
         "norm_distance": norm_dist,
         "exact_bonds": mps_exact.bond_sizes(),
         "truncated_bonds": mps_trunc.bond_sizes(),
