@@ -124,7 +124,7 @@ def evaluate_truncation_error(
         "exact_max_bond": mps_exact.max_bond(),
         "truncated_max_bond": mps_trunc.max_bond(),
         "overlap": overlap,
-        "infidelity": fidelity,
+        "fidelity": fidelity,
         "norm_distance": norm_dist,
         "exact_bonds": mps_exact.bond_sizes(),
         "truncated_bonds": mps_trunc.bond_sizes(),
