@@ -9,11 +9,22 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.0",
+    "quimb>=1.15.0",
+    "tt2dd",
 ]
 
 [project.scripts]
 tt-evdd-crossfertilisation = "tt_evdd_crossfertilisation:main"
+tt-evdd-pipeline = "tt_evdd_crossfertilisation.pipeline:main"
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.workspace]
+members = [
+    "tt2dd",
+]
+
+[tool.uv.sources]
+tt2dd = { workspace = true, editable = true }
