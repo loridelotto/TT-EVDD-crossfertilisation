@@ -8,11 +8,14 @@ From a state vector psi (2**n amplitudes, site 0 = most significant bit):
 and the two deterministic diagrams are compared for every chi.
 
 Typical use:
-    result, diagrams = run_pipeline(psi)
+    result = run_pipeline(psi)
     print_table(result)
 
 or from the command line:
     python -m tt_evdd_crossfertilisation.pipeline state.npy --out results.json --tex results.tex
+
+The diagrams are kept only when asked for (a dict passed as diagrams, or
+--tex): on 16+ qubits they take tens of GB.
 """
 
 import argparse
@@ -54,11 +57,45 @@ def log(msg):
     print(msg, file=sys.stderr, flush=True)
 
 
-def run_pipeline(psi, chis=None, cutoff=CUTOFF, verbose=False):
-    """Run both routes for every chi in chis (default: chi_max - 1 down to 1).
+def chis_for_fidelities(mps, targets):
+    """For every target fidelity, the smallest chi whose truncation reaches it.
 
-    Returns (result, diagrams): result is JSON-serialisable, diagrams holds
-    the exact EVDD under "exact" and, for every chi, the triple
+    The fidelity of the truncation grows with chi, so each target is a binary
+    search over 1 .. chi_max that only truncates the MPS (no diagram is built).
+    Targets that only chi_max reaches (no truncation at all) are dropped, and
+    targets that land on the same chi give one chi.  Returns the chis, largest first.
+    """
+    chi_max = mps.max_bond()
+    F = {chi_max: 1.0}
+
+    def fid(chi):
+        if chi not in F:
+            F[chi] = evaluate_truncation_error(mps, max_bond=chi)[1]["target_reached"]
+        return F[chi]
+
+    found = {}
+    for target in targets:
+        lo, hi = 1, chi_max
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if fid(mid) >= target:
+                hi = mid
+            else:
+                lo = mid + 1
+        found[target] = lo
+    log("chi per target: " + ", ".join(
+        f"F>={t} -> {'none (needs chi_max)' if c == chi_max else c}" for t, c in found.items()))
+    return sorted({c for c in found.values() if c < chi_max}, reverse=True)
+
+
+def run_pipeline(psi, chis=None, cutoff=CUTOFF, verbose=False, diagrams=None):
+    """Run both routes for every chi in chis (default: chi_max - 1 down to 1);
+    chis can also be a function of the exact MPS that returns the list.
+
+    Returns the results as a JSON-serialisable dict. The diagrams of each chi
+    are dropped once measured, unless a dict is passed as diagrams: it gets
+    the exact EVDD under "exact", the nd-EVDD of the untruncated TT under
+    "exact_nd" and, for every chi, the triple
     (nd-EVDD, EVDD from the TT, EVDD from Hillmich).
     With verbose, prints the progress, an estimate of the time left and the
     total time.
@@ -70,7 +107,11 @@ def run_pipeline(psi, chis=None, cutoff=CUTOFF, verbose=False):
     mps = convert_to_canonical_TT(psi, cutoff=cutoff)
     n = mps.L
     chi_max = mps.max_bond()
-    chis = list(range(chi_max - 1, 0, -1) if chis is None else chis)
+    if chis is None:
+        chis = range(chi_max - 1, 0, -1)
+    elif callable(chis):
+        chis = chis(mps)
+    chis = list(chis)
 
     result = {
         "n": n,
@@ -80,7 +121,9 @@ def run_pipeline(psi, chis=None, cutoff=CUTOFF, verbose=False):
         "levels_exact": level_counts(det, n),
         "rows": [],
     }
-    diagrams = {"exact": det}
+    if diagrams is not None:
+        diagrams["exact"] = det
+        diagrams["exact_nd"] = convert_tt_to_evdd(TensorTrainState.from_quimb(mps))
     setup = time.perf_counter() - start
     if verbose:
         log(f"exact EVDD and MPS built in {fmt_time(setup)}; {len(chis)} values of chi to go")
@@ -116,7 +159,8 @@ def run_pipeline(psi, chis=None, cutoff=CUTOFF, verbose=False):
             "F_between": fidelity(tt_det, hill),
             "time": time.perf_counter() - step_start,
         })
-        diagrams[chi] = (nd, tt_det, hill)
+        if diagrams is not None:
+            diagrams[chi] = (nd, tt_det, hill)
 
         if verbose:
             # remaining steps at the mean pace so far: a rough estimate, steps differ in cost
@@ -130,7 +174,7 @@ def run_pipeline(psi, chis=None, cutoff=CUTOFF, verbose=False):
     result["time_total"] = time.perf_counter() - start
     if verbose:
         log(f"total time: {fmt_time(result['time_total'])}\n")
-    return result, diagrams
+    return result
 
 
 def print_table(result):
@@ -175,14 +219,20 @@ def print_table(result):
 
 
 def draw(result, diagrams):
-    """A standalone LaTeX document: the exact EVDD, then for every chi the
-    EVDD from the TT, the nd-EVDD it came from, and the Hillmich EVDD."""
-    figures = [[to_tikz(diagrams["exact"])]]
-    captions = [[f"exact: {result['size_exact']} nodes"]]
+    """A standalone LaTeX document: the exact EVDD and the nd-EVDD of the
+    untruncated TT, then for every chi the EVDD from the TT, the nd-EVDD it
+    came from, and the Hillmich EVDD. Every edge carries its weight and, in
+    brackets, its norm contribution."""
+    nd = diagrams["exact_nd"]
+    nd_kind = "" if nd.is_deterministic else " (non-deterministic)"
+    figures = [[to_tikz(diagrams["exact"], edge_contrib=True), nd_to_tikz(nd, edge_contrib=True)]]
+    captions = [[f"exact: {result['size_exact']} nodes",
+                 f"exact nd-EVDD from TT{nd_kind}: {nd.num_nodes} nodes, {nd.num_edges} edges"]]
     for r in result["rows"]:
         nd, tt_det, hill = diagrams[r["chi"]]
         nd_kind = "" if r["nd_is_det"] else " (non-deterministic)"
-        figures.append([to_tikz(tt_det), nd_to_tikz(nd), to_tikz(hill)])
+        figures.append([to_tikz(tt_det, edge_contrib=True), nd_to_tikz(nd, edge_contrib=True),
+                        to_tikz(hill, edge_contrib=True)])
         captions.append([
             f"$\\chi={r['chi']}$, TT $\\to$ det: {r['tt_det_size']} nodes, $F={r['F_tt_det']:.3f}$",
             f"nd-EVDD from TT{nd_kind}: {r['nd_nodes']} nodes, {r['nd_edges']} edges",
@@ -201,8 +251,9 @@ def main(argv=None):
     p.add_argument("--quiet", action="store_true", help="do not print progress and timing")
     args = p.parse_args(argv)
 
-    result, diagrams = run_pipeline(np.load(args.state), chis=args.chis, cutoff=args.cutoff,
-                                    verbose=not args.quiet)
+    diagrams = {} if args.tex else None
+    result = run_pipeline(np.load(args.state), chis=args.chis, cutoff=args.cutoff,
+                          verbose=not args.quiet, diagrams=diagrams)
     print_table(result)
     if args.out:
         args.out.write_text(json.dumps(result, indent=2))

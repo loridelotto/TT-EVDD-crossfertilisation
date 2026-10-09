@@ -17,7 +17,7 @@ Several pictures in the same list end up side by side.
 import math
 from fractions import Fraction
 
-from .hillmich_approx import TERM, nodes_by_level
+from .hillmich_approx import TERM, nodes_by_level, contributions
 
 EPS = 1e-9          # tolerance for rendering, not for the structure
 
@@ -58,6 +58,15 @@ def _weight(z):
     return f"{_real(z.real)}{sign}{_real(abs(z.imag))}i"
 
 
+def _edge_label(lab, contrib):
+    """The text on an edge: its weight (None when it is 1) and, when given,
+    its norm contribution in brackets."""
+    if contrib is None:
+        return f"${lab}$" if lab else None
+    tag = f"{{\\color{{red!65!black}}[{contrib:.3g}]}}"
+    return f"${lab}$\\,{tag}" if lab else tag
+
+
 def _order(dd, by_level):
     """Order the nodes of each level left to right by their smallest path.
 
@@ -82,7 +91,7 @@ def _order(dd, by_level):
             for lv, ids in by_level.items()}
 
 
-def to_tikz(evdd, labels=None, dx=2.4, dy=2.0):
+def to_tikz(evdd, labels=None, edge_contrib=False, dx=2.4, dy=2.0):
     """Render a diagram as a TikZ picture, ready to paste into a LaTeX file.
 
     Needs \\usepackage{amsmath,tikz} and \\usetikzlibrary{arrows.meta,positioning}.
@@ -93,8 +102,12 @@ def to_tikz(evdd, labels=None, dx=2.4, dy=2.0):
 
     labels: optional dict id -> string printed next to each node, e.g.
             {i: f"{c[i]:.2f}" for i in c} to show the norm contributions.
+    edge_contrib: also print on every edge, in brackets, its norm
+            contribution: the probability of the paths through it,
+            c(source) * |w|^2 since every node has unit norm below it.
     """
     dd, root_edge = evdd
+    c = contributions(evdd) if edge_contrib else None
     by_level = _order(dd, nodes_by_level(evdd))
     n_levels = max(by_level, default=-1) + 1
 
@@ -142,8 +155,8 @@ def to_tikz(evdd, labels=None, dx=2.4, dy=2.0):
             if w == 0:
                 continue                      # dead branch: not drawn
             dest = "term" if t == TERM else f"n{t}"
-            lab = _weight(w)
-            mid = f" node[lbl, {side}, pos={along}] {{${lab}$}}" if lab else ""
+            text = _edge_label(_weight(w), c[i] * abs(w) ** 2 if c else None)
+            mid = f" node[lbl, {side}, pos={along}] {{{text}}}" if text else ""
             link = f"to[{bend}]" if twin else "--"
             out.append(f"  \\draw[e, {style}] (n{i}) {link}{mid} ({dest});")
 
@@ -201,7 +214,55 @@ def _nd_order(nodes, by_level, root):
             for lv, ids in by_level.items()}
 
 
-def nd_to_tikz(nd, labels=None, dx=3.0, dy=2.2, spread=35):
+def nd_edge_contributions(obj):
+    """Norm contribution of every edge of a non-deterministic EVDD (the JSON
+    object of the tt2dd.nd-evdd format), keyed by (source, branch, index in
+    the branch).
+
+    The paths through an edge s -> t on branch b form the vector
+    L_s (x) w (x) R_t, where L_s sums every path root -> s and R_t every path
+    t -> terminal; its squared norm ||L_s||^2 |w|^2 ||R_t||^2 is the
+    contribution. Paths of different edges may interfere, so unlike the
+    deterministic case the contributions of a level need not add up to 1.
+    ||L||^2 and ||R||^2 come from the Gram matrices <L_u, L_v>, <R_u, R_v>
+    of the nodes of each level, built top-down and bottom-up.
+    """
+    term = obj["terminal_id"]
+    nodes = {v["id"]: v for v in obj["nodes"]}
+    by_level = {}
+    for v in obj["nodes"]:
+        by_level.setdefault(v["level"], []).append(v["id"])
+    keys = ("edges_0", "edges_1")
+
+    def pairs(u, v):
+        """Edges of u and v on the same branch, two by two."""
+        for k in keys:
+            for e in nodes[u][k]:
+                for f in nodes[v][k]:
+                    yield complex(*e["weight"]), e["target"], complex(*f["weight"]), f["target"]
+
+    R = {(term, term): 1.0}
+    for lv in sorted(by_level, reverse=True):
+        for u in by_level[lv]:
+            for v in by_level[lv]:
+                R[u, v] = sum(we.conjugate() * wf * R.get((te, tf), 0)
+                              for we, te, wf, tf in pairs(u, v))
+
+    root = obj["root_edge"]["target"]
+    L = {(root, root): abs(complex(*obj["root_edge"]["weight"])) ** 2}
+    for lv in sorted(by_level):
+        for u in by_level[lv]:
+            for v in by_level[lv]:
+                if (u, v) in L:
+                    for we, te, wf, tf in pairs(u, v):
+                        L[te, tf] = L.get((te, tf), 0) + we.conjugate() * wf * L[u, v]
+
+    return {(i, k, j): abs(L.get((i, i), 0)) * abs(complex(*e["weight"])) ** 2
+                       * abs(R.get((e["target"], e["target"]), 0))
+            for i in nodes for k in keys for j, e in enumerate(nodes[i][k])}
+
+
+def nd_to_tikz(nd, labels=None, edge_contrib=False, dx=3.0, dy=2.2, spread=35):
     """Render a non-deterministic EVDD as a TikZ picture.
 
     nd is the colleague's diagram: either the JSON object of the
@@ -214,10 +275,13 @@ def nd_to_tikz(nd, labels=None, dx=3.0, dy=2.2, spread=35):
     each with its label on the outer side of its curve.
 
     labels: optional dict id -> string printed next to each node.
+    edge_contrib: also print on every edge, in brackets, its norm
+            contribution (see nd_edge_contributions).
     """
     obj = nd.to_dict() if hasattr(nd, "to_dict") else nd
     if obj.get("format") != "tt2dd.nd-evdd":
         raise ValueError(f"not a tt2dd.nd-evdd diagram: {obj.get('format')!r}")
+    c = nd_edge_contributions(obj) if edge_contrib else None
     n, term = obj["num_levels"], obj["terminal_id"]
     nodes = {v["id"]: v for v in obj["nodes"]}
     by_level = {}
@@ -266,13 +330,14 @@ def nd_to_tikz(nd, labels=None, dx=3.0, dy=2.2, spread=35):
         for i in by_level[lv]:
             groups = {}
             for key, style in (("edges_0", "dashed"), ("edges_1", "solid")):
-                for e in nodes[i][key]:
-                    groups.setdefault(e["target"], []).append((style, complex(*e["weight"])))
+                for j, e in enumerate(nodes[i][key]):
+                    groups.setdefault(e["target"], []).append(
+                        (style, complex(*e["weight"]), c[i, key, j] if c else None))
             for t, edges in groups.items():
                 k = len(edges)
-                for j, (style, w) in enumerate(edges):
+                for j, (style, w, con) in enumerate(edges):
                     angle = (j - (k - 1) / 2) * spread
-                    lab = _weight(w)
+                    text = _edge_label(_weight(w), con)
                     if angle == 0:
                         link = "--"
                         place = "left" if style == "dashed" else "right"
@@ -281,7 +346,7 @@ def nd_to_tikz(nd, labels=None, dx=3.0, dy=2.2, spread=35):
                         # east: the label goes on the bulging side
                         link = f"to[bend {'right' if angle < 0 else 'left'}={abs(angle):g}]"
                         place = "auto, swap" if angle < 0 else "auto"
-                    mid = f" node[lbl, {place}, pos=0.5] {{${lab}$}}" if lab else ""
+                    mid = f" node[lbl, {place}, pos=0.5] {{{text}}}" if text else ""
                     out.append(f"  \\draw[e, {style}] (n{i}) {link}{mid} ({name(t)});")
 
     out.append(r"\end{tikzpicture}")
